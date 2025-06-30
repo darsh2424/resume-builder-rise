@@ -1,7 +1,8 @@
-const express = require("express");
-const router = express.Router();
-const User = require("../models/User");
+import express from "express";
+import User from "../models/User.js";
+import { requireAuth } from "../middleware/requireAuth.js";
 
+const router = express.Router();
 router.post("/google-login", async (req, res) => {
   const { name, email, photoURL } = req.body;
 
@@ -25,4 +26,4 @@ router.post("/google-login", async (req, res) => {
   res.json(user);
 });
 
-module.exports = router;
+export default router;

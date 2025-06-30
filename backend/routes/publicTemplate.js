@@ -1,6 +1,7 @@
 import express from "express";
 import PublicTemplate from "../models/PublicTemplate.js";
-import { requireAuth } from "../middleware/auth.js";
+import { requireAuth } from "../middleware/requireAuth.js";
+
 
 const router = express.Router();
 
@@ -69,5 +70,4 @@ router.post("/:id/rate", requireAuth, async (req, res) => {
     res.status(400).send("Error updating rating");
   }
 });
-
 export default router;

@@ -1,11 +1,10 @@
-const express = require("express");
-const mongoose = require("mongoose");
-const cors = require("cors");
-const dotenv = require("dotenv");
-const authRoutes = require("./routes/auth");
-const personalTemplateRoute = require("./routes/personalTemplate");
-const publicTemplateRoute = require("./routes/publicTemplate");
-
+import express from "express";
+import mongoose from "mongoose";
+import cors from "cors";
+import dotenv from "dotenv";
+import authRoutes from "./routes/auth.js";
+import personalTemplateRoute from "./routes/personalTemplate.js";
+import publicTemplateRoute from "./routes/publicTemplate.js";
 
 dotenv.config();
 const app = express();
