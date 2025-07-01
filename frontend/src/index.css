@@ -1,1 +1,17 @@
 @import "tailwindcss";
+
+button{
+    cursor:pointer !import;
+}
+
+.canvas-container {
+  position: relative;
+  margin: 0 auto;
+  z-index:10;
+}
+
+.upper-canvas, .lower-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+}

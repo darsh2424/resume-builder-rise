@@ -12,7 +12,7 @@ dist
 dist-ssr
 *.local
 .env
-serviceAccount/.json
+serviceAccount/firebaseServiceAccountKey.json
 
 # Editor directories and files
 .vscode/*

@@ -14,10 +14,13 @@ router.get("/", requireAuth, async (req, res) => {
   }
 });
 
-// GET a single personal template
+// GET single template
 router.get("/:id", requireAuth, async (req, res) => {
   try {
-    const doc = await PersonalTemplate.findOne({ _id: req.params.id, userId: req.user.id }).lean();
+    const doc = await PersonalTemplate.findOne({
+      _id: req.params.id,
+      userId: req.user.id
+    }).lean();
     if (!doc) return res.status(404).send("Template not found");
     res.json(doc);
   } catch (err) {
@@ -25,26 +28,28 @@ router.get("/:id", requireAuth, async (req, res) => {
   }
 });
 
-// CREATE new personal template
+// CREATE new template
 router.post("/", requireAuth, async (req, res) => {
   try {
-    const { canvasJson, title, fields } = req.body;
-    if (!canvasJson || !title) return res.status(400).send("Missing required fields");
 
     const doc = new PersonalTemplate({
       userId: req.user.id,
-      title,
-      canvasJson,
-      fields: fields || []
+      ...req.body
     });
     await doc.save();
+
     res.status(201).json(doc);
   } catch (err) {
-    res.status(500).send("Failed to save template");
+    console.error("Error saving template:", err); 
+    res.status(500).json({
+      error: "Failed to save template",
+      details: err.message,
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
   }
 });
 
-// UPDATE personal template
+// UPDATE template
 router.put("/:id", requireAuth, async (req, res) => {
   try {
     const doc = await PersonalTemplate.findOneAndUpdate(
@@ -56,6 +61,20 @@ router.put("/:id", requireAuth, async (req, res) => {
     res.json(doc);
   } catch (err) {
     res.status(400).send("Invalid update request");
+  }
+});
+
+// DELETE template
+router.delete("/:id", requireAuth, async (req, res) => {
+  try {
+    const doc = await PersonalTemplate.findOneAndDelete({
+      _id: req.params.id,
+      userId: req.user.id
+    });
+    if (!doc) return res.status(404).send("Template not found");
+    res.json({ message: "Template deleted successfully" });
+  } catch (err) {
+    res.status(400).send("Invalid delete request");
   }
 });
 

@@ -11,7 +11,7 @@ router.get("/", async (req, res) => {
     const pubs = await PublicTemplate.find().lean();
     res.json(pubs);
   } catch (err) {
-    res.status(500).send("Error fetching public templates");
+    res.status(500).send({ msg: "Error fetching public templates" });
   }
 });
 
@@ -48,21 +48,20 @@ router.post("/", requireAuth, async (req, res) => {
     res.status(500).send("Failed to save public template");
   }
 });
-
-// POST rating or update
 router.post("/:id/rate", requireAuth, async (req, res) => {
   try {
     const { rating } = req.body;
-    if (typeof rating !== "number" || rating < 1 || rating > 5) {
-      return res.status(400).send("Invalid rating value");
-    }
-
     const pub = await PublicTemplate.findById(req.params.id);
+    
     if (!pub) return res.status(404).send("Template not found");
 
-    const existing = pub.ratings.find(r => r.userId.equals(req.user.id));
-    if (existing) existing.rating = rating;
-    else pub.ratings.push({ userId: req.user.id, rating });
+    const existingRating = pub.ratings.find(r => r.userId.equals(req.user.id));
+    
+    if (existingRating) {
+      existingRating.rating = rating;
+    } else {
+      pub.ratings.push({ userId: req.user.id, rating });
+    }
 
     await pub.save();
     res.json(pub);

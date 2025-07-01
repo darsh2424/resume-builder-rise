@@ -78,7 +78,7 @@ export default function EditorToolbar({ canvas }) {
   };
 
   return (
-    <div className="flex gap-2 flex-wrap bg-white p-3 rounded shadow fixed top-2 left-1/2 -translate-x-1/2 z-50 border border-gray-200">
+    <div className="flex gap-2 flex-wrap bg-white p-3 rounded shadow fixed top-2 left-1/2 -translate-x-1/2 z-30 border border-gray-200">
       <button onClick={() => applyStyle("bold")} className="btn">Bold</button>
       <select
         onChange={(e) => applyStyle("fontSize", parseInt(e.target.value))}

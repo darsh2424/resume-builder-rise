@@ -53,7 +53,7 @@ export default function ToolSidebar({ onToolAction, isMobile }) {
     );
 
     const desktop = (
-        <div className="fixed min-h-lvh md:flex flex-col items-center p-2 border-r bg-white">
+        <div className="absolute min-h-lvh md:flex flex-col items-center z-10 bg-white p-2 border-r shadow-md">
             {categories.map(c => (
                 <button key={c.id} onClick={() => openCat(c.id)} className="p-3 bg-gray-100 rounded hover:bg-gray-200">
                     {c.icon}

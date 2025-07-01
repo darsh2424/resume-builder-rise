@@ -8,12 +8,7 @@ const Header = () => {
       <Link to="/" className="text-xl font-bold text-blue-600">
         ResumeBanao
       </Link>
-      <div className="p-4">
-        <Link to="/" className="text-xl font-bold text-blue-600">
-          <button className="bg-blue-500 text-white px-4 py-2 rounded">Publish Template</button>
-        </Link>
-        <GoogleSignInButton />
-      </div>
+      <GoogleSignInButton />
     </header>
   );
 };

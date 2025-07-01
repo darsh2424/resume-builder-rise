@@ -1,30 +1,79 @@
-
+// ResumeEditor.js
 import { useEffect, useRef, useState, useCallback } from "react";
-import { FaUndo, FaRedo } from "react-icons/fa";
+import { useSearchParams, useParams, useNavigate } from "react-router-dom";
+import {
+  FaUndo, FaRedo, FaSave, FaGlobe, FaCode, FaExclamationTriangle,
+  FaCheck, FaTimes, FaSyncAlt
+} from "react-icons/fa";
+import {
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Button,
+  CircularProgress,
+  Snackbar,
+  Alert
+} from "@mui/material";
 import { v4 as uuidv4 } from "uuid";
+import axios from "axios";
 import ToolSidebar from "./components/ToolSlidebar/ToolSidebar";
+import { useAuth } from "../auth/AuthContext";
 
-export default function ResumeEditor() {
+export default function ResumeEditor({ isNewTemplate = false }) {
   const canvasRef = useRef(null);
+  const clipboardRef = useRef(null);
+  const hasCreatedTemplateRef = useRef(false);
   const [canvasSelect, setCanvasSelect] = useState([]);
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [undoStack, setUndoStack] = useState([]);
   const [redoStack, setRedoStack] = useState([]);
-  const clipboardRef = useRef(null);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [devMode, setDevMode] = useState(false);
+  const [devModeJson, setDevModeJson] = useState("");
+  const [isJsonValid, setIsJsonValid] = useState(true);
+  const [showJsonValidation, setShowJsonValidation] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [showPublishDialog, setShowPublishDialog] = useState(false);
+  const [snackbar, setSnackbar] = useState({ open: false, message: "", severity: "success" });
+  const [templateData, setTemplateData] = useState({
+    id: null,
+    title: "Untitled Resume",
+    isPublic: false
+  });
+
+  const { id: templateId } = useParams();
+  const [searchParams] = useSearchParams();
+  const { firebaseUser, userDetails, token } = useAuth();
+  const navigate = useNavigate();
+
+  // Initialize template JSON structure
+  const initialTemplateJson = {
+    version: "5.2.4",
+    objects: [],
+    background: "#ffffff"
+  };
+
+  const [templateJson, setTemplateJson] = useState(initialTemplateJson);
 
   // Utility functions
+  const updateTemplateJson = (canvas) => {
+    if (!canvas) return;
+    const canvasState = canvas.toJSON(["id", "link"]);
+    const newTemplateJson = {
+      version: canvasState.version || "5.2.4",
+      objects: canvasState.objects || [],
+      background: canvasState.background || "#ffffff",
+    };
+    setTemplateJson(newTemplateJson);
+  };
+
   const validateCanvas = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) {
+    if (!canvasRef.current) {
       console.error("Canvas is not initialized");
       return false;
     }
     return true;
-  };
-
-  const getActiveObjectSafe = () => {
-    if (!validateCanvas()) return null;
-    return canvasRef.current.getActiveObject();
   };
 
   const saveState = (selectedObjects = null) => {
@@ -32,7 +81,7 @@ export default function ResumeEditor() {
       setCanvasSelect(selectedObjects);
     }
     const canvas = canvasRef.current;
-    if (canvas && typeof canvas.toJSON === "function") {
+    if (canvas) {
       const snapshot = JSON.parse(JSON.stringify(canvas.toJSON(["id", "link"])));
       setUndoStack(prev => [...prev, snapshot]);
       setRedoStack([]);
@@ -41,17 +90,13 @@ export default function ResumeEditor() {
 
   const undo = () => {
     if (undoStack.length < 2) return;
-
     const canvas = canvasRef.current;
     const newRedoStack = [...redoStack];
     const newUndoStack = [...undoStack];
-
     newRedoStack.push(newUndoStack.pop());
     const last = newUndoStack[newUndoStack.length - 1];
-
     setRedoStack(newRedoStack);
     setUndoStack(newUndoStack);
-
     canvas.loadFromJSON(last, () => {
       canvas.renderAll();
       updateTemplateJson(canvas);
@@ -60,41 +105,17 @@ export default function ResumeEditor() {
 
   const redo = () => {
     if (!redoStack.length) return;
-
     const canvas = canvasRef.current;
     const newRedoStack = [...redoStack];
     const newUndoStack = [...undoStack];
-
     const next = newRedoStack.pop();
     newUndoStack.push(next);
-
     setRedoStack(newRedoStack);
     setUndoStack(newUndoStack);
-
     canvas.loadFromJSON(next, () => {
       canvas.renderAll();
       updateTemplateJson(canvas);
     });
-  };
-
-  const updateTemplateJson = (canvas) => {
-    const canvasState = JSON.parse(JSON.stringify(canvas.toJSON(["id", "link"])));
-    templateJson.version = canvasState.version || "5.2.4";
-    templateJson.objects = canvasState.objects;
-    templateJson.background = canvasState.background;
-  };
-
-  const applyAndSave = (obj = null) => {
-    const canvas = canvasRef.current;
-    if (!validateCanvas()) return;
-
-    if (obj) {
-      canvas.setActiveObject(obj);
-    }
-
-    canvas.renderAll();
-    updateTemplateJson(canvas);
-    saveState(obj ? [obj] : null);
   };
 
   const decorateObject = (obj) => {
@@ -110,11 +131,20 @@ export default function ResumeEditor() {
     obj.setCoords();
   };
 
+  const applyAndSave = (obj = null) => {
+    const canvas = canvasRef.current;
+    if (!validateCanvas()) return;
+    if (obj) canvas.setActiveObject(obj);
+    canvas.renderAll();
+    updateTemplateJson(canvas);
+    saveState(obj ? [obj] : null);
+  };
+
   const handleToolAction = useCallback((action, payload) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const active = canvas.getActiveObject();
-    const isText = active && active.type === "textbox";
+    const isText = active?.type === "textbox";
 
     switch (action) {
       case "bold":
@@ -275,6 +305,181 @@ export default function ResumeEditor() {
     }
   }, [undoStack, redoStack]);
 
+  // Export canvas as image and upload to imgBB
+  const exportAndUploadImage = async () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+
+    try {
+      const dataUrl = canvas.toDataURL({
+        format: 'png',
+        quality: 1
+      });
+
+      const formData = new FormData();
+      formData.append('image', dataUrl.split(',')[1]);
+
+      const response = await axios.post('https://api.imgbb.com/1/upload', formData, {
+        params: {
+          key: import.meta.env.VITE_IMGBB_API_KEY
+        }
+      });
+
+      return response.data.data.url;
+    } catch (error) {
+      console.error("Error uploading image:", error);
+      return null;
+    }
+  };
+
+  // Create new blank template in backend
+  const createNewTemplate = async () => {
+    try {
+
+      // Get fresh token using Firebase v9+ syntax
+      const freshToken = token || (firebaseUser && await firebaseUser.getIdToken());
+
+      if (!freshToken) {
+        throw new Error("No authentication token available");
+      }
+
+      const payload = {
+        title: "Untitled Resume",
+        canvasJson: initialTemplateJson,
+        thumbnail: "",
+        fields: []
+      };
+
+      console.log("Sending payload:", payload);
+
+      const response = await axios.post(
+        `${import.meta.env.VITE_API_BASE_URL}api/personal-template`,
+        payload,
+        {
+          headers: {
+            Authorization: `Bearer ${freshToken}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      console.log("Response received:", response.data);
+      return response.data;
+    } catch (error) {
+      console.error("Create template error:", error);
+      setSnackbar({
+        open: true,
+        message: error.response?.data?.error || "Failed to create template",
+        severity: "error"
+      });
+      return null;
+    }
+  };
+
+  // Save template to backend
+  const saveTemplate = async () => {
+    if (!userDetails) {
+      setSnackbar({ open: true, message: "Please login to save", severity: "error" });
+      return;
+    }
+
+    const freshToken = token || (firebaseUser && await firebaseUser.getIdToken());
+
+    if (!freshToken) {
+      throw new Error("No authentication token available");
+    }
+
+    setIsSaving(true);
+    try {
+      const imageUrl = await exportAndUploadImage();
+      const canvas = canvasRef.current;
+      const canvasJson = canvas.toJSON(["id", "link"]);
+
+      const payload = {
+        title: templateData.title,
+        canvasJson,
+        thumbnail: imageUrl || ""
+      };
+
+      let response;
+
+      if (templateData.id) {
+        // Update existing template
+        response = await axios.put(
+          `${import.meta.env.VITE_API_BASE_URL}api/personal-template/${templateData.id}`,
+          payload,
+          { headers: { Authorization: `Bearer ${freshToken}`, 'Content-Type': 'application/json' } }
+        );
+      } else {
+        // Create new template
+        response = await axios.post(
+          `${import.meta.env.VITE_API_BASE_URL}api/personal-template`,
+          payload,
+          { headers: { Authorization: `Bearer ${freshToken}`, 'Content-Type': 'application/json' } }
+        );
+        setTemplateData(prev => ({ ...prev, id: response.data._id }));
+      }
+
+      setSnackbar({ open: true, message: "Saved successfully", severity: "success" });
+    } catch (error) {
+      console.error("Error saving template:", error);
+      setSnackbar({ open: true, message: "Failed to save", severity: "error" });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Publish template to public
+  const publishTemplate = async () => {
+    if (!userDetails) {
+      setSnackbar({ open: true, message: "Please login to publish", severity: "error" });
+      return;
+    }
+
+    const freshToken = token || (firebaseUser && await firebaseUser.getIdToken());
+
+    if (!freshToken) {
+      throw new Error("No authentication token available");
+    }
+
+    setIsLoading(true);
+    try {
+      const imageUrl = await exportAndUploadImage();
+      const canvas = canvasRef.current;
+      const canvasJson = canvas.toJSON(["id", "link"]);
+
+      const response = await axios.post(
+        `${import.meta.env.VITE_API_BASE_URL}api/public-template`,
+        {
+          title: templateData.title,
+          canvasJson,
+          thumbnail: imageUrl,
+          creatorName: userDetails.name,
+          creatorPic: userDetails.photo
+        },
+        { headers: { Authorization: `Bearer ${freshToken}`, 'Content-Type': 'application/json' } }
+      );
+
+      // Delete the private template after publishing
+      if (templateData.id) {
+        await axios.delete(
+          `${import.meta.env.VITE_API_BASE_URL}api/personal-template/${templateData.id}`,
+          { headers: { Authorization: `Bearer ${freshToken}`, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      setSnackbar({ open: true, message: "Published successfully", severity: "success" });
+      navigate(`/profile/${userDetails.username}`);
+    } catch (error) {
+      console.error("Error publishing template:", error);
+      setSnackbar({ open: true, message: "Failed to publish", severity: "error" });
+    } finally {
+      setIsLoading(false);
+      setShowPublishDialog(false);
+    }
+  };
+
+  // Initialize template
   useEffect(() => {
     const resize = () => setIsMobile(window.innerWidth < 768);
     window.addEventListener("resize", resize);
@@ -282,1122 +487,370 @@ export default function ResumeEditor() {
   }, []);
 
   useEffect(() => {
-    const c = new window.fabric.Canvas(canvasRef.current, {
-      height: 1000,
-      width: 600,
-      backgroundColor: "#fff",
-      preserveObjectStacking: true,
-      renderOnAddRemove: true,
-      stateful: true
-    });
-
-    try {
-      c.loadFromJSON(templateJson, () => {
-        c.getObjects().forEach(obj => {
-          decorateObject(obj);
-        });
-        canvasRef.current = c;
-        c.renderAll();
-        saveState();
-      });
-    } catch (error) {
-      console.error("Error loading template:", error);
-      c.renderAll();
-      saveState();
+    if (devMode) {
+      setDevModeJson(JSON.stringify(templateJson, null, 2));
+      setIsJsonValid(true);
+      setShowJsonValidation(false);
     }
-
-    const eventHandlers = {
-      "object:modified": () => {
-        updateTemplateJson(c);
-        saveState();
-      },
-      "object:added": () => {
-        updateTemplateJson(c);
-        saveState();
-      },
-      "object:removed": () => {
-        updateTemplateJson(c);
-        saveState();
-      },
-      "selection:created": (e) => {
-        setCanvasSelect(e?.selected || []);
-        updateTemplateJson(c);
-      },
-      "selection:updated": (e) => {
-        setCanvasSelect(e?.selected || []);
-        updateTemplateJson(c);
-      },
-      "selection:cleared": () => {
-        setCanvasSelect([]);
-        updateTemplateJson(c);
-      }
-    };
-
-    Object.entries(eventHandlers).forEach(([event, handler]) => {
-      c.on(event, handler);
-    });
-
-    return () => {
-      Object.entries(eventHandlers).forEach(([event, handler]) => {
-        c.off(event, handler);
-      });
-      c.dispose();
-    };
-  }, []);
+  }, [devMode]);
 
   useEffect(() => {
-    const handler = (e) => {
+    if (!devMode) return;
+
+    try {
+      JSON.parse(devModeJson);
+      setIsJsonValid(true);
+    } catch (error) {
+      setIsJsonValid(false);
+    }
+  }, [devModeJson, devMode]);
+
+  const applyJsonToCanvas = () => {
+    try {
+      const parsedJson = JSON.parse(devModeJson);
+
+      // Basic validation
+      if (!parsedJson || typeof parsedJson !== 'object') {
+        throw new Error("Invalid JSON structure");
+      }
+
+      if (!parsedJson.objects || !Array.isArray(parsedJson.objects)) {
+        throw new Error("JSON must contain an 'objects' array");
+      }
 
       const canvas = canvasRef.current;
       if (!canvas) return;
 
-      // ESC to clear selection
-      if (e.key === "Escape") {
-        const active = canvas.getActiveObject();
-        if (active) {
-          canvas.discardActiveObject();
-          canvas.renderAll();
-          setCanvasSelect([]);
-        }
-        return;
-      }
-      if (e.key === "Delete") {
-        const active = canvas.getActiveObject();
-        if (active) {
-          handleToolAction("deleteObject")
-          saveState()
-        }
-        return;
-      }
-      // detect ctrl/cmd
-      const ctrl = e.ctrlKey || e.metaKey;
-      if (!ctrl) return;
+      // Clear the canvas
+      canvas.clear();
 
-      const key = e.key.toLowerCase();
-      // prevent default browser behavior for these combos
-      if (["c", "v", "x", "z", "y"].includes(key)) {
-        e.preventDefault();
-        switch (key) {
-          case "c":
-            handleToolAction("copy");
-            break;
-          case "x":
-            handleToolAction("cut");
-            break;
-          case "v":
-            handleToolAction("paste");
-            break;
-          case "z":
-            // Cmd+Shift+Z or Ctrl+Shift+Z should redo
-            if (e.shiftKey) handleToolAction("redo");
-            else handleToolAction("undo");
-            break;
-          case "y":
-            handleToolAction("redo");
-            break;
+      // Load new JSON
+      canvas.loadFromJSON(parsedJson, () => {
+        canvas.getObjects().forEach(obj => decorateObject(obj));
+        canvas.renderAll();
+
+        // Update states
+        updateTemplateJson(canvas);
+        saveState();
+
+        // Add to undo stack
+        setUndoStack(prev => [...prev, parsedJson]);
+        setRedoStack([]);
+
+        setSnackbar({
+          open: true,
+          message: "JSON applied successfully",
+          severity: "success"
+        });
+      });
+    } catch (error) {
+      setSnackbar({
+        open: true,
+        message: `Error applying JSON: ${error.message}`,
+        severity: "error"
+      });
+    }
+  };
+
+  useEffect(() => {
+    const initializeCanvas = async () => {
+
+       if (isNewTemplate && hasCreatedTemplateRef.current) return;
+
+
+      const canvas = new window.fabric.Canvas(canvasRef.current, {
+        height: 1000,
+        width: 600,
+        backgroundColor: "#fff",
+        preserveObjectStacking: true,
+        renderOnAddRemove: true,
+        stateful: true,
+      });
+
+      canvasRef.current = canvas;
+
+      try {
+        let templateToLoad = initialTemplateJson;
+        let templateInfo = {
+          id: null,
+          title: "Untitled Resume",
+          isPublic: false
+        };
+
+        // Handle new template creation
+        if (isNewTemplate) {
+          hasCreatedTemplateRef.current = true;
+
+          const newTemplate = await createNewTemplate();
+          if (newTemplate) {
+            templateInfo = {
+              id: newTemplate._id,
+              title: newTemplate.title,
+              isPublic: false
+            };
+            // Redirect to editor with new template ID
+            navigate(`/editor/${newTemplate._id}`, { replace: true });
+          }
         }
+        // Handle existing template
+        else if (templateId) {
+          const source = searchParams.get("source");
+
+          if (source === "public") {
+            const { data } = await axios.get(
+              `${import.meta.env.VITE_API_BASE_URL}api/public-template/${templateId}`
+            );
+            templateToLoad = data?.canvasJson || initialTemplateJson;
+            templateInfo = {
+              id: data._id,
+              title: data.title,
+              isPublic: true
+            };
+          } else {
+
+            const freshToken = token || (firebaseUser && await firebaseUser.getIdToken());
+
+            if (!freshToken) {
+              throw new Error("No authentication token available");
+            }
+            const { data } = await axios.get(
+              `${import.meta.env.VITE_API_BASE_URL}api/personal-template/${templateId}`,
+              { headers: { Authorization: `Bearer ${freshToken}`, 'Content-Type': 'application/json' } }
+            );
+            templateToLoad = data?.canvasJson || initialTemplateJson;
+            templateInfo = {
+              id: data._id,
+              title: data.title,
+              isPublic: false
+            };
+            // console.log(templateInfo)
+          }
+        }
+
+
+        setTemplateData(templateInfo);
+        setTemplateJson(templateToLoad);
+
+        // Load the template into canvas
+        canvas.loadFromJSON(templateToLoad, () => {
+          canvas.getObjects().forEach(obj => decorateObject(obj));
+          canvas.renderAll();
+          saveState();
+        });
+      } catch (err) {
+        console.error("Error loading template:", err);
+        setSnackbar({ open: true, message: "Error loading template", severity: "error" });
+      } finally {
+        setIsLoading(false);
       }
+
+      // Event handlers
+      const handlers = {
+        "object:modified": () => { updateTemplateJson(canvas); saveState(); },
+        "object:added": () => { updateTemplateJson(canvas); saveState(); },
+        "object:removed": () => { updateTemplateJson(canvas); saveState(); },
+        "selection:created": (e) => { setCanvasSelect(e?.selected || []); updateTemplateJson(canvas); },
+        "selection:updated": (e) => { setCanvasSelect(e?.selected || []); updateTemplateJson(canvas); },
+        "selection:cleared": () => { setCanvasSelect([]); updateTemplateJson(canvas); },
+      };
+
+      Object.entries(handlers).forEach(([e, fn]) => canvas.on(e, fn));
+
+      return () => {
+        Object.entries(handlers).forEach(([e, fn]) => canvas.off(e, fn));
+        canvas.dispose();
+      };
     };
 
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [handleToolAction]);
+    initializeCanvas();
+  }, [templateId, isNewTemplate, userDetails]);
 
   return (
-    <div className="relative flex">
-      <ToolSidebar onToolAction={handleToolAction} isMobile={isMobile} />
-      <div className="fixed top-4 right-4 z-50 flex gap-2">
-        <button onClick={undo} className="p-2 bg-white rounded shadow hover:bg-gray-100 transition">
-          <FaUndo />
-        </button>
-        <button onClick={redo} className="p-2 bg-white rounded shadow hover:bg-gray-100 transition">
-          <FaRedo />
-        </button>
+    <div className="relative flex flex-col h-screen">
+      {/* Main content area */}
+      <div className="flex-1">
+        <ToolSidebar onToolAction={handleToolAction} isMobile={isMobile} disabled={isLoading || isSaving} />
+
+        <div className="fixed top-20 right-4 z-0 flex gap-2">
+          <button onClick={undo} disabled={isLoading || isSaving} className="p-2 bg-white rounded shadow hover:bg-gray-100 transition"><FaUndo /></button>
+          <button onClick={redo} disabled={isLoading || isSaving} className="p-2 bg-white rounded shadow hover:bg-gray-100 transition"><FaRedo /></button>
+        </div>
+
+        <div className="flex-1 p-4 flex justify-center items-center relative z-0">
+          <canvas ref={canvasRef} className="border rounded shadow-lg" />
+
+          {/* Dev Mode Panel */}
+          {devMode && (
+            <div className={`absolute ${isMobile ? 'bottom-20 left-0 right-0 h-1/3' : 'right-0 top-0 bottom-20 w-1/3'} bg-gray-800 text-white p-4 overflow-auto z-10`}>
+              <div className="flex justify-between items-center mb-2">
+                <h3 className="text-lg font-bold">Canvas JSON Editor</h3>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setDevModeJson(JSON.stringify(templateJson, null, 2))}
+                    className="p-1 bg-gray-700 rounded hover:bg-gray-600"
+                    title="Reset to current state"
+                  >
+                    <FaSyncAlt />
+                  </button>
+                  <button
+                    onClick={applyJsonToCanvas}
+                    disabled={!isJsonValid}
+                    className={`p-1 rounded ${isJsonValid ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-500 cursor-not-allowed'}`}
+                    title="Apply JSON to canvas"
+                  >
+                    Apply
+                  </button>
+                  <button
+                    onClick={() => setDevMode(false)}
+                    className="p-1 bg-red-600 rounded hover:bg-red-700"
+                    title="Close Dev Mode"
+                  >
+                    <FaTimes />
+                  </button>
+                </div>
+              </div>
+
+              {showJsonValidation && (
+                <div className={`mb-2 p-2 text-sm rounded ${isJsonValid ? 'bg-green-900' : 'bg-red-900'}`}>
+                  {isJsonValid ? "Valid JSON" : "Invalid JSON - Check syntax"}
+                </div>
+              )}
+
+              <textarea
+                value={devModeJson} cols="45"
+                onChange={(e) => setDevModeJson(e.target.value)}
+                onFocus={() => setShowJsonValidation(true)}
+                onBlur={() => setShowJsonValidation(false)}
+                className={`flex-1 font-mono text-xs p-2 rounded bg-gray-900 min-h-screen ${!isJsonValid && showJsonValidation ? 'border border-red-500' : ''}`}
+                spellCheck="false"
+              />
+
+              <div className="mt-2 text-xs text-gray-400">
+                <p>Tip: Edit the JSON above and click the checkmark to apply changes.</p>
+                <p>Warning: Invalid JSON may break your layout.</p>
+              </div>
+            </div>
+          )}
+
+
+          {(isLoading || isSaving) && (
+            <div className="absolute inset-0 bg-black bg-opacity-30 flex items-center justify-center z-20">
+              <div className="bg-white p-6 rounded-lg shadow-lg flex flex-col items-center">
+                <CircularProgress color="primary" size={60} />
+                <p className="mt-4 text-gray-700">
+                  {isNewTemplate ? "Creating new template..." :
+                    isSaving ? "Saving your work..." : "Loading template..."}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
-      <div className="flex-1 p-4 flex justify-center">
-        <canvas ref={canvasRef} className="border rounded shadow-lg" tabIndex={0} />
+
+      <div className="fixed bottom-0 left-0 right-0 bg-yellow-100 p-2 flex items-center justify-between border-t border-yellow-200 z-30">
+        <div className="flex items-center">
+          <FaExclamationTriangle className="text-yellow-600 mr-2" />
+          <span className="text-yellow-800 text-sm">Save Your Work To Not Lose It</span>
+        </div>
+        <div className="flex items-center space-x-2">
+          {!templateData.isPublic && (
+            <button
+              onClick={() => setShowPublishDialog(true)}
+              className="flex items-center px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
+              disabled={isLoading || isSaving}
+            >
+              <FaGlobe className="mr-2" /> Publish
+            </button>
+          )}
+          <button
+            onClick={saveTemplate}
+            disabled={isLoading || isSaving}
+            className="flex items-center px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
+          >
+            {isSaving ? (
+              <CircularProgress size={16} color="inherit" className="mr-2" />
+            ) : (
+              <FaSave className="mr-2" />
+            )}
+            Save
+          </button>
+          <button
+            onClick={() => setDevMode(!devMode)}
+            className={`flex items-center px-3 py-1 rounded ${devMode ? 'bg-gray-800 text-white' : 'bg-gray-200 hover:bg-gray-300'}`}
+            disabled={isLoading || isSaving}
+          >
+            <FaCode className="mr-2" /> Dev Mode
+          </button>
+        </div>
       </div>
-      <button
-        onClick={() => {
-          const canvas = canvasRef.current;
-          if (!canvas) return;
-          const currentJson = JSON.stringify(canvas.toJSON(["id", "link"]), null, 2);
-          navigator.clipboard.writeText(currentJson);
-          alert("Current canvas state copied to clipboard!");
+
+      {/* Publish Confirmation Dialog */}
+      <Dialog
+        open={showPublishDialog}
+        onClose={() => setShowPublishDialog(false)}
+        sx={{
+          '& .MuiDialog-paper': {
+            minWidth: '400px',
+            maxWidth: '90vw',
+            borderRadius: '12px'
+          }
         }}
-        className="absolute top-2 right-45 bg-blue-600 text-white px-3 py-1 rounded shadow hover:bg-blue-700 transition"
       >
-        📋 Copy JSON
-      </button>
+        <DialogTitle sx={{
+          backgroundColor: '#f5f5f5',
+          borderBottom: '1px solid #e0e0e0',
+          fontWeight: '600'
+        }}>
+          Publish Template
+        </DialogTitle>
+        <DialogContent sx={{ padding: '24px' }}>
+          <p className="mb-4" style={{ fontSize: '1rem' }}>
+            Are you sure you want to make this template public?
+          </p>
+          <p className="text-sm text-gray-600">
+            Once published, this template will be visible to all users and you won't be able to make it private again.
+          </p>
+        </DialogContent>
+        <DialogActions sx={{
+          padding: '16px 24px',
+          borderTop: '1px solid #e0e0e0'
+        }}>
+          <Button
+            onClick={() => setShowPublishDialog(false)}
+            sx={{ textTransform: 'none' }}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={publishTemplate}
+            color="primary"
+            variant="contained"
+            disabled={isLoading}
+            startIcon={isLoading ? <CircularProgress size={20} /> : null}
+            sx={{ textTransform: 'none' }}
+          >
+            Publish
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Snackbar for notifications */}
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={6000}
+        onClose={() => setSnackbar(prev => ({ ...prev, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        className="bottom-25"
+      >
+        <Alert
+          onClose={() => setSnackbar(prev => ({ ...prev, open: false }))}
+          severity={snackbar.severity}
+          sx={{ width: '100%' }}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
+
     </div>
   );
-}
-
-function updateTemplateJson(canvas) {
-  const updatedObjects = canvas.getObjects().map(obj =>
-    obj.toObject(["id", "link"])
-  );
-  templateJson.objects = updatedObjects;
-}
-
-const templateJson = {
-  "version": "5.1.0",
-  "objects": [
-    {
-      "type": "textbox",
-      "version": "5.1.0",
-      "originX": "left",
-      "originY": "top",
-      "left": 55,
-      "top": 71,
-      "width": 500,
-      "height": 31.64,
-      "fill": "#333",
-      "stroke": null,
-      "strokeWidth": 1,
-      "strokeDashArray": null,
-      "strokeLineCap": "butt",
-      "strokeDashOffset": 0,
-      "strokeLineJoin": "miter",
-      "strokeUniform": false,
-      "strokeMiterLimit": 4,
-      "scaleX": 1,
-      "scaleY": 1,
-      "angle": 0,
-      "flipX": false,
-      "flipY": false,
-      "opacity": 1,
-      "shadow": null,
-      "visible": true,
-      "backgroundColor": "",
-      "fillRule": "nonzero",
-      "paintFirst": "fill",
-      "globalCompositeOperation": "source-over",
-      "skewX": 0,
-      "skewY": 0,
-      "fontFamily": "Arial",
-      "fontWeight": "bold",
-      "fontSize": 28,
-      "text": "JANE SMITH",
-      "underline": false,
-      "overline": false,
-      "linethrough": false,
-      "textAlign": "center",
-      "fontStyle": "normal",
-      "lineHeight": 1.16,
-      "textBackgroundColor": "",
-      "charSpacing": 0,
-      "styles": {},
-      "direction": "ltr",
-      "path": null,
-      "pathStartOffset": 0,
-      "pathSide": "left",
-      "pathAlign": "baseline",
-      "minWidth": 20,
-      "splitByGrapheme": false,
-      "id": "6fc4339d-8570-4fe4-8c26-16e6ac7cf7aa"
-    },
-    {
-      "type": "textbox",
-      "version": "5.1.0",
-      "originX": "left",
-      "originY": "top",
-      "left": 55,
-      "top": 111,
-      "width": 500,
-      "height": 13.56,
-      "fill": "#666",
-      "stroke": null,
-      "strokeWidth": 1,
-      "strokeDashArray": null,
-      "strokeLineCap": "butt",
-      "strokeDashOffset": 0,
-      "strokeLineJoin": "miter",
-      "strokeUniform": false,
-      "strokeMiterLimit": 4,
-      "scaleX": 1,
-      "scaleY": 1,
-      "angle": 0,
-      "flipX": false,
-      "flipY": false,
-      "opacity": 1,
-      "shadow": null,
-      "visible": true,
-      "backgroundColor": "",
-      "fillRule": "nonzero",
-      "paintFirst": "fill",
-      "globalCompositeOperation": "source-over",
-      "skewX": 0,
-      "skewY": 0,
-      "fontFamily": "Arial",
-      "fontWeight": "normal",
-      "fontSize": 12,
-      "text": "jane.smith@example.com | (987) 654-3210 | Portland, OR | linkedin.com/in/janesmith",
-      "underline": false,
-      "overline": false,
-      "linethrough": false,
-      "textAlign": "center",
-      "fontStyle": "normal",
-      "lineHeight": 1.16,
-      "textBackgroundColor": "",
-      "charSpacing": 0,
-      "styles": {},
-      "direction": "ltr",
-      "path": null,
-      "pathStartOffset": 0,
-      "pathSide": "left",
-      "pathAlign": "baseline",
-      "minWidth": 20,
-      "splitByGrapheme": false,
-      "id": "84330bf3-24bf-43ae-b449-c73ccdcbf78c"
-    },
-    {
-      "type": "line",
-      "version": "5.1.0",
-      "originX": "left",
-      "originY": "top",
-      "left": 50,
-      "top": 100,
-      "width": null,
-      "height": null,
-      "fill": "rgb(0,0,0)",
-      "stroke": "#333",
-      "strokeWidth": 1,
-      "strokeDashArray": null,
-      "strokeLineCap": "butt",
-      "strokeDashOffset": 0,
-      "strokeLineJoin": "miter",
-      "strokeUniform": false,
-      "strokeMiterLimit": 4,
-      "scaleX": 1,
-      "scaleY": 1,
-      "angle": 0,
-      "flipX": false,
-      "flipY": false,
-      "opacity": 1,
-      "shadow": null,
-      "visible": true,
-      "backgroundColor": "",
-      "fillRule": "nonzero",
-      "paintFirst": "fill",
-      "globalCompositeOperation": "source-over",
-      "skewX": 0,
-      "skewY": 0,
-      "id": "ec17a1a0-f9b6-44e6-9bc8-2cdfb7db8c78",
-      "x1": null,
-      "x2": null,
-      "y1": null,
-      "y2": null
-    },
-    {
-      "type": "textbox",
-      "version": "5.1.0",
-      "originX": "left",
-      "originY": "top",
-      "left": 33,
-      "top": 176,
-      "width": 500,
-      "height": 18.08,
-      "fill": "#333",
-      "stroke": null,
-      "strokeWidth": 1,
-      "strokeDashArray": null,
-      "strokeLineCap": "butt",
-      "strokeDashOffset": 0,
-      "strokeLineJoin": "miter",
-      "strokeUniform": false,
-      "strokeMiterLimit": 4,
-      "scaleX": 1,
-      "scaleY": 1,
-      "angle": 0,
-      "flipX": false,
-      "flipY": false,
-      "opacity": 1,
-      "shadow": null,
-      "visible": true,
-      "backgroundColor": "",
-      "fillRule": "nonzero",
-      "paintFirst": "fill",
-      "globalCompositeOperation": "source-over",
-      "skewX": 0,
-      "skewY": 0,
-      "fontFamily": "Arial",
-      "fontWeight": "bold",
-      "fontSize": 16,
-      "text": "EXPERIENCE",
-      "underline": false,
-      "overline": false,
-      "linethrough": false,
-      "textAlign": "left",
-      "fontStyle": "normal",
-      "lineHeight": 1.16,
-      "textBackgroundColor": "",
-      "charSpacing": 0,
-      "styles": {},
-      "direction": "ltr",
-      "path": null,
-      "pathStartOffset": 0,
-      "pathSide": "left",
-      "pathAlign": "baseline",
-      "minWidth": 20,
-      "splitByGrapheme": false,
-      "id": "1ac3fb71-72c4-46cb-bcc5-51c09ce3d815"
-    },
-    {
-      "type": "textbox",
-      "version": "5.1.0",
-      "originX": "left",
-      "originY": "top",
-      "left": 33,
-      "top": 196,
-      "width": 500,
-      "height": 13.56,
-      "fill": "#333",
-      "stroke": null,
-      "strokeWidth": 1,
-      "strokeDashArray": null,
-      "strokeLineCap": "butt",
-      "strokeDashOffset": 0,
-      "strokeLineJoin": "miter",
-      "strokeUniform": false,
-      "strokeMiterLimit": 4,
-      "scaleX": 1,
-      "scaleY": 1,
-      "angle": 0,
-      "flipX": false,
-      "flipY": false,
-      "opacity": 1,
-      "shadow": null,
-      "visible": true,
-      "backgroundColor": "",
-      "fillRule": "nonzero",
-      "paintFirst": "fill",
-      "globalCompositeOperation": "source-over",
-      "skewX": 0,
-      "skewY": 0,
-      "fontFamily": "Arial",
-      "fontWeight": "bold",
-      "fontSize": 12,
-      "text": "Product Designer",
-      "underline": false,
-      "overline": false,
-      "linethrough": false,
-      "textAlign": "left",
-      "fontStyle": "normal",
-      "lineHeight": 1.16,
-      "textBackgroundColor": "",
-      "charSpacing": 0,
-      "styles": {},
-      "direction": "ltr",
-      "path": null,
-      "pathStartOffset": 0,
-      "pathSide": "left",
-      "pathAlign": "baseline",
-      "minWidth": 20,
-      "splitByGrapheme": false,
-      "id": "c942c264-6cd7-497e-afb3-76e3a23ef1e4"
-    },
-    {
-      "type": "textbox",
-      "version": "5.1.0",
-      "originX": "left",
-      "originY": "top",
-      "left": 33,
-      "top": 216,
-      "width": 500,
-      "height": 15.82,
-      "fill": "#666",
-      "stroke": null,
-      "strokeWidth": 1,
-      "strokeDashArray": null,
-      "strokeLineCap": "butt",
-      "strokeDashOffset": 0,
-      "strokeLineJoin": "miter",
-      "strokeUniform": false,
-      "strokeMiterLimit": 4,
-      "scaleX": 1,
-      "scaleY": 1,
-      "angle": 0,
-      "flipX": false,
-      "flipY": false,
-      "opacity": 1,
-      "shadow": null,
-      "visible": true,
-      "backgroundColor": "",
-      "fillRule": "nonzero",
-      "paintFirst": "fill",
-      "globalCompositeOperation": "source-over",
-      "skewX": 0,
-      "skewY": 0,
-      "fontFamily": "Arial",
-      "fontWeight": "normal",
-      "fontSize": 14,
-      "text": "Creative Agency | Jun 2019 - Present",
-      "underline": false,
-      "overline": false,
-      "linethrough": false,
-      "textAlign": "left",
-      "fontStyle": "normal",
-      "lineHeight": 1.16,
-      "textBackgroundColor": "",
-      "charSpacing": 0,
-      "styles": {},
-      "direction": "ltr",
-      "path": null,
-      "pathStartOffset": 0,
-      "pathSide": "left",
-      "pathAlign": "baseline",
-      "minWidth": 20,
-      "splitByGrapheme": false,
-      "id": "b4c4ffd0-7d63-455c-8649-02f581c86a61"
-    },
-    {
-      "type": "textbox",
-      "version": "5.1.0",
-      "originX": "left",
-      "originY": "top",
-      "left": 33,
-      "top": 236,
-      "width": 500,
-      "height": 51.53,
-      "fill": "#333",
-      "stroke": null,
-      "strokeWidth": 1,
-      "strokeDashArray": null,
-      "strokeLineCap": "butt",
-      "strokeDashOffset": 0,
-      "strokeLineJoin": "miter",
-      "strokeUniform": false,
-      "strokeMiterLimit": 4,
-      "scaleX": 1,
-      "scaleY": 1,
-      "angle": 0,
-      "flipX": false,
-      "flipY": false,
-      "opacity": 1,
-      "shadow": null,
-      "visible": true,
-      "backgroundColor": "",
-      "fillRule": "nonzero",
-      "paintFirst": "fill",
-      "globalCompositeOperation": "source-over",
-      "skewX": 0,
-      "skewY": 0,
-      "fontFamily": "Arial",
-      "fontWeight": "normal",
-      "fontSize": 12,
-      "text": "• Designed 15+ client websites with 95% client satisfaction\n• Created design system used across all company projects\n• Conducted user research leading to 25% increase in conversions",
-      "underline": false,
-      "overline": false,
-      "linethrough": false,
-      "textAlign": "left",
-      "fontStyle": "normal",
-      "lineHeight": 1.4,
-      "textBackgroundColor": "",
-      "charSpacing": 0,
-      "styles": {},
-      "direction": "ltr",
-      "path": null,
-      "pathStartOffset": 0,
-      "pathSide": "left",
-      "pathAlign": "baseline",
-      "minWidth": 20,
-      "splitByGrapheme": false,
-      "id": "1a6d5335-5835-4c27-b4b7-a197d9015ede"
-    },
-    {
-      "type": "textbox",
-      "version": "5.1.0",
-      "originX": "left",
-      "originY": "top",
-      "left": 37,
-      "top": 353,
-      "width": 500,
-      "height": 18.08,
-      "fill": "#333",
-      "stroke": null,
-      "strokeWidth": 1,
-      "strokeDashArray": null,
-      "strokeLineCap": "butt",
-      "strokeDashOffset": 0,
-      "strokeLineJoin": "miter",
-      "strokeUniform": false,
-      "strokeMiterLimit": 4,
-      "scaleX": 1,
-      "scaleY": 1,
-      "angle": 0,
-      "flipX": false,
-      "flipY": false,
-      "opacity": 1,
-      "shadow": null,
-      "visible": true,
-      "backgroundColor": "",
-      "fillRule": "nonzero",
-      "paintFirst": "fill",
-      "globalCompositeOperation": "source-over",
-      "skewX": 0,
-      "skewY": 0,
-      "fontFamily": "Arial",
-      "fontWeight": "bold",
-      "fontSize": 16,
-      "text": "EDUCATION",
-      "underline": false,
-      "overline": false,
-      "linethrough": false,
-      "textAlign": "left",
-      "fontStyle": "normal",
-      "lineHeight": 1.16,
-      "textBackgroundColor": "",
-      "charSpacing": 0,
-      "styles": {},
-      "direction": "ltr",
-      "path": null,
-      "pathStartOffset": 0,
-      "pathSide": "left",
-      "pathAlign": "baseline",
-      "minWidth": 20,
-      "splitByGrapheme": false,
-      "id": "49151714-bca5-4c0c-aa1a-ade577cc364f"
-    },
-    {
-      "type": "textbox",
-      "version": "5.1.0",
-      "originX": "left",
-      "originY": "top",
-      "left": 37,
-      "top": 376,
-      "width": 500,
-      "height": 13.56,
-      "fill": "#333",
-      "stroke": null,
-      "strokeWidth": 1,
-      "strokeDashArray": null,
-      "strokeLineCap": "butt",
-      "strokeDashOffset": 0,
-      "strokeLineJoin": "miter",
-      "strokeUniform": false,
-      "strokeMiterLimit": 4,
-      "scaleX": 1,
-      "scaleY": 1,
-      "angle": 0,
-      "flipX": false,
-      "flipY": false,
-      "opacity": 1,
-      "shadow": null,
-      "visible": true,
-      "backgroundColor": "",
-      "fillRule": "nonzero",
-      "paintFirst": "fill",
-      "globalCompositeOperation": "source-over",
-      "skewX": 0,
-      "skewY": 0,
-      "fontFamily": "Arial",
-      "fontWeight": "bold",
-      "fontSize": 12,
-      "text": "BFA in Graphic Design",
-      "underline": false,
-      "overline": false,
-      "linethrough": false,
-      "textAlign": "left",
-      "fontStyle": "normal",
-      "lineHeight": 1.16,
-      "textBackgroundColor": "",
-      "charSpacing": 0,
-      "styles": {},
-      "direction": "ltr",
-      "path": null,
-      "pathStartOffset": 0,
-      "pathSide": "left",
-      "pathAlign": "baseline",
-      "minWidth": 20,
-      "splitByGrapheme": false,
-      "id": "d4a368a6-fa28-4cdc-8747-e54116464b5a"
-    },
-    {
-      "type": "textbox",
-      "version": "5.1.0",
-      "originX": "left",
-      "originY": "top",
-      "left": 37,
-      "top": 390,
-      "width": 500,
-      "height": 15.82,
-      "fill": "#666",
-      "stroke": null,
-      "strokeWidth": 1,
-      "strokeDashArray": null,
-      "strokeLineCap": "butt",
-      "strokeDashOffset": 0,
-      "strokeLineJoin": "miter",
-      "strokeUniform": false,
-      "strokeMiterLimit": 4,
-      "scaleX": 1,
-      "scaleY": 1,
-      "angle": 0,
-      "flipX": false,
-      "flipY": false,
-      "opacity": 1,
-      "shadow": null,
-      "visible": true,
-      "backgroundColor": "",
-      "fillRule": "nonzero",
-      "paintFirst": "fill",
-      "globalCompositeOperation": "source-over",
-      "skewX": 0,
-      "skewY": 0,
-      "fontFamily": "Arial",
-      "fontWeight": "normal",
-      "fontSize": 14,
-      "text": "University of Oregon | Graduated 2018",
-      "underline": false,
-      "overline": false,
-      "linethrough": false,
-      "textAlign": "left",
-      "fontStyle": "normal",
-      "lineHeight": 1.16,
-      "textBackgroundColor": "",
-      "charSpacing": 0,
-      "styles": {},
-      "direction": "ltr",
-      "path": null,
-      "pathStartOffset": 0,
-      "pathSide": "left",
-      "pathAlign": "baseline",
-      "minWidth": 20,
-      "splitByGrapheme": false,
-      "id": "1ce3cd04-9bd7-4286-a585-c2dc35e67f52"
-    },
-    {
-      "type": "textbox",
-      "version": "5.1.0",
-      "originX": "left",
-      "originY": "top",
-      "left": 35,
-      "top": 418,
-      "width": 500,
-      "height": 13.56,
-      "fill": "#333",
-      "stroke": null,
-      "strokeWidth": 1,
-      "strokeDashArray": null,
-      "strokeLineCap": "butt",
-      "strokeDashOffset": 0,
-      "strokeLineJoin": "miter",
-      "strokeUniform": false,
-      "strokeMiterLimit": 4,
-      "scaleX": 1,
-      "scaleY": 1,
-      "angle": 0,
-      "flipX": false,
-      "flipY": false,
-      "opacity": 1,
-      "shadow": null,
-      "visible": true,
-      "backgroundColor": "",
-      "fillRule": "nonzero",
-      "paintFirst": "fill",
-      "globalCompositeOperation": "source-over",
-      "skewX": 0,
-      "skewY": 0,
-      "fontFamily": "Arial",
-      "fontWeight": "bold",
-      "fontSize": 12,
-      "text": "HSC - 2022",
-      "underline": false,
-      "overline": false,
-      "linethrough": false,
-      "textAlign": "left",
-      "fontStyle": "normal",
-      "lineHeight": 1.16,
-      "textBackgroundColor": "",
-      "charSpacing": 0,
-      "styles": {},
-      "direction": "ltr",
-      "path": null,
-      "pathStartOffset": 0,
-      "pathSide": "left",
-      "pathAlign": "baseline",
-      "minWidth": 20,
-      "splitByGrapheme": false,
-      "id": "3328481f-5c82-4754-81f0-da9a0957492a"
-    },
-    {
-      "type": "textbox",
-      "version": "5.1.0",
-      "originX": "left",
-      "originY": "top",
-      "left": 35,
-      "top": 432,
-      "width": 500,
-      "height": 15.82,
-      "fill": "#666",
-      "stroke": null,
-      "strokeWidth": 1,
-      "strokeDashArray": null,
-      "strokeLineCap": "butt",
-      "strokeDashOffset": 0,
-      "strokeLineJoin": "miter",
-      "strokeUniform": false,
-      "strokeMiterLimit": 4,
-      "scaleX": 1,
-      "scaleY": 1,
-      "angle": 0,
-      "flipX": false,
-      "flipY": false,
-      "opacity": 1,
-      "shadow": null,
-      "visible": true,
-      "backgroundColor": "",
-      "fillRule": "nonzero",
-      "paintFirst": "fill",
-      "globalCompositeOperation": "source-over",
-      "skewX": 0,
-      "skewY": 0,
-      "fontFamily": "Arial",
-      "fontWeight": "normal",
-      "fontSize": 14,
-      "text": "University of Oregon | Pass - 75%",
-      "underline": false,
-      "overline": false,
-      "linethrough": false,
-      "textAlign": "left",
-      "fontStyle": "normal",
-      "lineHeight": 1.16,
-      "textBackgroundColor": "",
-      "charSpacing": 0,
-      "styles": {},
-      "direction": "ltr",
-      "path": null,
-      "pathStartOffset": 0,
-      "pathSide": "left",
-      "pathAlign": "baseline",
-      "minWidth": 20,
-      "splitByGrapheme": false,
-      "id": "86bc44ab-1441-470b-9433-72bf0bbab902"
-    },
-    {
-      "type": "textbox",
-      "version": "5.1.0",
-      "originX": "left",
-      "originY": "top",
-      "left": 35,
-      "top": 468,
-      "width": 500,
-      "height": 13.56,
-      "fill": "#333",
-      "stroke": null,
-      "strokeWidth": 1,
-      "strokeDashArray": null,
-      "strokeLineCap": "butt",
-      "strokeDashOffset": 0,
-      "strokeLineJoin": "miter",
-      "strokeUniform": false,
-      "strokeMiterLimit": 4,
-      "scaleX": 1,
-      "scaleY": 1,
-      "angle": 0,
-      "flipX": false,
-      "flipY": false,
-      "opacity": 1,
-      "shadow": null,
-      "visible": true,
-      "backgroundColor": "",
-      "fillRule": "nonzero",
-      "paintFirst": "fill",
-      "globalCompositeOperation": "source-over",
-      "skewX": 0,
-      "skewY": 0,
-      "fontFamily": "Arial",
-      "fontWeight": "bold",
-      "fontSize": 12,
-      "text": "SSC - 2020",
-      "underline": false,
-      "overline": false,
-      "linethrough": false,
-      "textAlign": "left",
-      "fontStyle": "normal",
-      "lineHeight": 1.16,
-      "textBackgroundColor": "",
-      "charSpacing": 0,
-      "styles": {},
-      "direction": "ltr",
-      "path": null,
-      "pathStartOffset": 0,
-      "pathSide": "left",
-      "pathAlign": "baseline",
-      "minWidth": 20,
-      "splitByGrapheme": false,
-      "id": "df7dec0b-ef06-4479-bb43-244f645c2c77"
-    },
-    {
-      "type": "textbox",
-      "version": "5.1.0",
-      "originX": "left",
-      "originY": "top",
-      "left": 34,
-      "top": 485,
-      "width": 500,
-      "height": 15.82,
-      "fill": "#666",
-      "stroke": null,
-      "strokeWidth": 1,
-      "strokeDashArray": null,
-      "strokeLineCap": "butt",
-      "strokeDashOffset": 0,
-      "strokeLineJoin": "miter",
-      "strokeUniform": false,
-      "strokeMiterLimit": 4,
-      "scaleX": 1,
-      "scaleY": 1,
-      "angle": 0,
-      "flipX": false,
-      "flipY": false,
-      "opacity": 1,
-      "shadow": null,
-      "visible": true,
-      "backgroundColor": "",
-      "fillRule": "nonzero",
-      "paintFirst": "fill",
-      "globalCompositeOperation": "source-over",
-      "skewX": 0,
-      "skewY": 0,
-      "fontFamily": "Arial",
-      "fontWeight": "normal",
-      "fontSize": 14,
-      "text": "University of Oregon | Pass - 80%",
-      "underline": false,
-      "overline": false,
-      "linethrough": false,
-      "textAlign": "left",
-      "fontStyle": "normal",
-      "lineHeight": 1.16,
-      "textBackgroundColor": "",
-      "charSpacing": 0,
-      "styles": {},
-      "direction": "ltr",
-      "path": null,
-      "pathStartOffset": 0,
-      "pathSide": "left",
-      "pathAlign": "baseline",
-      "minWidth": 20,
-      "splitByGrapheme": false,
-      "id": "45c82440-9045-4aec-921d-8e29c3dfa054"
-    },
-    {
-      "type": "textbox",
-      "version": "5.1.0",
-      "originX": "left",
-      "originY": "top",
-      "left": 35,
-      "top": 554,
-      "width": 500,
-      "height": 18.08,
-      "fill": "#333",
-      "stroke": null,
-      "strokeWidth": 1,
-      "strokeDashArray": null,
-      "strokeLineCap": "butt",
-      "strokeDashOffset": 0,
-      "strokeLineJoin": "miter",
-      "strokeUniform": false,
-      "strokeMiterLimit": 4,
-      "scaleX": 1,
-      "scaleY": 1,
-      "angle": 0,
-      "flipX": false,
-      "flipY": false,
-      "opacity": 1,
-      "shadow": null,
-      "visible": true,
-      "backgroundColor": "",
-      "fillRule": "nonzero",
-      "paintFirst": "fill",
-      "globalCompositeOperation": "source-over",
-      "skewX": 0,
-      "skewY": 0,
-      "fontFamily": "Arial",
-      "fontWeight": "bold",
-      "fontSize": 16,
-      "text": "PROJECTS",
-      "underline": false,
-      "overline": false,
-      "linethrough": false,
-      "textAlign": "left",
-      "fontStyle": "normal",
-      "lineHeight": 1.16,
-      "textBackgroundColor": "",
-      "charSpacing": 0,
-      "styles": {},
-      "direction": "ltr",
-      "path": null,
-      "pathStartOffset": 0,
-      "pathSide": "left",
-      "pathAlign": "baseline",
-      "minWidth": 20,
-      "splitByGrapheme": false,
-      "id": "c6f365ac-de46-4cb8-8f4d-461940242034"
-    },
-    {
-      "type": "textbox",
-      "version": "5.1.0",
-      "originX": "left",
-      "originY": "top",
-      "left": 34,
-      "top": 582,
-      "width": 500,
-      "height": 144.28,
-      "fill": "#666",
-      "stroke": null,
-      "strokeWidth": 1,
-      "strokeDashArray": null,
-      "strokeLineCap": "butt",
-      "strokeDashOffset": 0,
-      "strokeLineJoin": "miter",
-      "strokeUniform": false,
-      "strokeMiterLimit": 4,
-      "scaleX": 0.91,
-      "scaleY": 0.91,
-      "angle": 0,
-      "flipX": false,
-      "flipY": false,
-      "opacity": 1,
-      "shadow": null,
-      "visible": true,
-      "backgroundColor": "",
-      "fillRule": "nonzero",
-      "paintFirst": "fill",
-      "globalCompositeOperation": "source-over",
-      "skewX": 0,
-      "skewY": 0,
-      "fontFamily": "Arial",
-      "fontWeight": "normal",
-      "fontSize": 14,
-      "text": "• Student Portal - NEEV (PHP | MySQL | Bootstrap | WAMP)\n           Seperate Dashboards with different functionalities\n\n• Library Management System (PHP | MySQL | WAMP)\n            Book issue, Book Return, Stock Management \n\n• Blog Website (React | Bootstrap)\n            Made during BFA",
-      "underline": false,
-      "overline": false,
-      "linethrough": false,
-      "textAlign": "left",
-      "fontStyle": "normal",
-      "lineHeight": 1.16,
-      "textBackgroundColor": "",
-      "charSpacing": 0,
-      "styles": {},
-      "direction": "ltr",
-      "path": null,
-      "pathStartOffset": 0,
-      "pathSide": "left",
-      "pathAlign": "baseline",
-      "minWidth": 20,
-      "splitByGrapheme": false,
-      "id": "85adcaa2-fe80-47d4-9704-3ef7172ffdfc"
-    },
-    {
-      "type": "textbox",
-      "version": "5.1.0",
-      "originX": "left",
-      "originY": "top",
-      "left": 37,
-      "top": 765,
-      "width": 500,
-      "height": 18.08,
-      "fill": "#333",
-      "stroke": null,
-      "strokeWidth": 1,
-      "strokeDashArray": null,
-      "strokeLineCap": "butt",
-      "strokeDashOffset": 0,
-      "strokeLineJoin": "miter",
-      "strokeUniform": false,
-      "strokeMiterLimit": 4,
-      "scaleX": 1,
-      "scaleY": 1,
-      "angle": 0,
-      "flipX": false,
-      "flipY": false,
-      "opacity": 1,
-      "shadow": null,
-      "visible": true,
-      "backgroundColor": "",
-      "fillRule": "nonzero",
-      "paintFirst": "fill",
-      "globalCompositeOperation": "source-over",
-      "skewX": 0,
-      "skewY": 0,
-      "fontFamily": "Arial",
-      "fontWeight": "bold",
-      "fontSize": 16,
-      "text": "Achievements",
-      "underline": false,
-      "overline": false,
-      "linethrough": false,
-      "textAlign": "left",
-      "fontStyle": "normal",
-      "lineHeight": 1.16,
-      "textBackgroundColor": "",
-      "charSpacing": 0,
-      "styles": {},
-      "direction": "ltr",
-      "path": null,
-      "pathStartOffset": 0,
-      "pathSide": "left",
-      "pathAlign": "baseline",
-      "minWidth": 20,
-      "splitByGrapheme": false,
-      "id": "6b48184e-afe6-4640-bc76-1935c626d6e1"
-    },
-    {
-      "type": "textbox",
-      "version": "5.1.0",
-      "originX": "left",
-      "originY": "top",
-      "left": 35,
-      "top": 792,
-      "width": 500,
-      "height": 144.28,
-      "fill": "#666",
-      "stroke": null,
-      "strokeWidth": 1,
-      "strokeDashArray": null,
-      "strokeLineCap": "butt",
-      "strokeDashOffset": 0,
-      "strokeLineJoin": "miter",
-      "strokeUniform": false,
-      "strokeMiterLimit": 4,
-      "scaleX": 0.94,
-      "scaleY": 0.94,
-      "angle": 0,
-      "flipX": false,
-      "flipY": false,
-      "opacity": 1,
-      "shadow": null,
-      "visible": true,
-      "backgroundColor": "",
-      "fillRule": "nonzero",
-      "paintFirst": "fill",
-      "globalCompositeOperation": "source-over",
-      "skewX": 0,
-      "skewY": 0,
-      "fontFamily": "Arial",
-      "fontWeight": "normal",
-      "fontSize": 14,
-      "text": "• Participated in CVMU Gyanotsav (2024)\n\n• 2nd Prize in SEMCOM’s Green Business and Technology Fair (2024) -\n       Zig Zag Zoom Game\n\n• Participated in CVMU Hackathon (2023)\n\n• Participated in Novuskill: AD Making Competition (2024)",
-      "underline": false,
-      "overline": false,
-      "linethrough": false,
-      "textAlign": "left",
-      "fontStyle": "normal",
-      "lineHeight": 1.16,
-      "textBackgroundColor": "",
-      "charSpacing": 0,
-      "styles": {},
-      "direction": "ltr",
-      "path": null,
-      "pathStartOffset": 0,
-      "pathSide": "left",
-      "pathAlign": "baseline",
-      "minWidth": 20,
-      "splitByGrapheme": false,
-      "id": "d7929805-3579-4a94-9d57-dee1ec5a5d6b"
-    }
-  ]
 }

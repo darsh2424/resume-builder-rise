@@ -10,19 +10,20 @@ export default function TemplateGallery() {
   const [postingId, setPostingId] = useState(null);
 
   const navigate = useNavigate();
-  const { firebaseUser } = useAuth();
+  const { firebaseUser,token } = useAuth();
 
   useEffect(() => {
     async function fetchTemplates() {
       try {
-        const res = await axios.get(`${import.meta.env.VITE_API_URL}api/public-templates`);
+        const res = await axios.get(`${import.meta.env.VITE_API_BASE_URL}api/public-template`);
         if (Array.isArray(res.data)) {
           setTemplates(res.data);
         } else {
           setError("Unexpected response format.");
         }
       } catch (err) {
-        setError("Failed to load templates. Please try again later.");
+        const msg = err.response?.data?.msg || "Failed to load templates. Please try again later.";
+        setError("Server says: " + msg);
         console.error(err);
       } finally {
         setLoading(false);
@@ -32,12 +33,13 @@ export default function TemplateGallery() {
     fetchTemplates();
   }, []);
 
+
   const handleUseTemplate = async (template) => {
     if (!firebaseUser) return;
     setPostingId(template._id);
 
     try {
-      const res = await axios.post(`${import.meta.env.VITE_API_URL}/personal-templates`, {
+      const res = await axios.post(`${import.meta.env.VITE_API_BASE_URL}api/personal-template`, {
         publicTemplateId: template._id,
         canvasJson: template.canvasJson,
         title: template.title,
